@@ -106,4 +106,9 @@ venv.bak/
 # Tacotron 2 oddities
 logs-*/
 training_data/
-
+LJSpeech-1.1
+tacotron_output
+wavenet_output
+training_data_wavenet_on_GT
+trainable_vars.txt
+dtw_data.txt

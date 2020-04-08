@@ -41,7 +41,8 @@ def plot_alignment(alignment, path, title=None, split_title=False, max_len=None)
 
 def plot_spectrogram(pred_spectrogram, path, title=None, split_title=False, target_spectrogram=None, max_len=None, auto_aspect=False):
 	if max_len is not None:
-		target_spectrogram = target_spectrogram[:max_len]
+		if target_spectrogram is not None:
+			target_spectrogram = target_spectrogram[:max_len]
 		pred_spectrogram = pred_spectrogram[:max_len]
 
 	if split_title:

@@ -25,7 +25,7 @@ class Tacotron():
 	def __init__(self, hparams):
 		self._hparams = hparams
 
-	def initialize(self, inputs, input_lengths, mel_targets=None, stop_token_targets=None, linear_targets=None, targets_lengths=None, gta=False,
+	def initialize(self, uttnames, inputs, input_lengths, mel_targets=None, stop_token_targets=None, linear_targets=None, targets_lengths=None, gta=False,
 			global_step=None, is_training=False, is_evaluating=False, split_infos=None):
 		"""
 		Initializes the model for inference
@@ -58,6 +58,7 @@ class Tacotron():
 			lout_int = [tf.int32]*hp.tacotron_num_gpus
 			lout_float = [tf.float32]*hp.tacotron_num_gpus
 
+			tower_uttnames = tf.split(uttnames, num_or_size_splits=hp.tacotron_num_gpus, axis=0) if uttnames is not None else uttnames
 			tower_input_lengths = tf.split(input_lengths, num_or_size_splits=hp.tacotron_num_gpus, axis=0)
 			tower_targets_lengths = tf.split(targets_lengths, num_or_size_splits=hp.tacotron_num_gpus, axis=0) if targets_lengths is not None else targets_lengths
 
@@ -238,6 +239,7 @@ class Tacotron():
 
 		if is_training:
 			self.ratio = self.helper._ratio
+		self.tower_uttnames = tower_uttnames
 		self.tower_inputs = tower_inputs
 		self.tower_input_lengths = tower_input_lengths
 		self.tower_mel_targets = tower_mel_targets

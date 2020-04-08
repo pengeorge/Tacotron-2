@@ -16,10 +16,12 @@ class Feeder:
 		Feeds batches of data into queue on a background thread.
 	"""
 
-	def __init__(self, coordinator, metadata_filename, hparams):
+	def __init__(self, coordinator, metadata_filename, hparams, shuffle_testset=False, test_only=False):
 		super(Feeder, self).__init__()
 		self._coord = coordinator
 		self._hparams = hparams
+		self._shuffle_testset = shuffle_testset
+		self._test_only = test_only
 		self._cleaner_names = [x.strip() for x in hparams.cleaners.split(',')]
 		self._train_offset = 0
 		self._test_offset = 0
@@ -79,12 +81,13 @@ class Feeder:
 			tf.placeholder(tf.float32, shape=(None, None, hparams.num_freq), name='linear_targets'),
 			tf.placeholder(tf.int32, shape=(None, ), name='targets_lengths'),
 			tf.placeholder(tf.int32, shape=(hparams.tacotron_num_gpus, None), name='split_infos'),
+			tf.placeholder(tf.string, shape=(None, ), name='uttnames'),
 			]
 
 			# Create queue for buffering data
-			queue = tf.FIFOQueue(8, [tf.int32, tf.int32, tf.float32, tf.float32, tf.float32, tf.int32, tf.int32], name='input_queue')
+			queue = tf.FIFOQueue(8, [tf.int32, tf.int32, tf.float32, tf.float32, tf.float32, tf.int32, tf.int32, tf.string], name='input_queue')
 			self._enqueue_op = queue.enqueue(self._placeholders)
-			self.inputs, self.input_lengths, self.mel_targets, self.token_targets, self.linear_targets, self.targets_lengths, self.split_infos = queue.dequeue()
+			self.inputs, self.input_lengths, self.mel_targets, self.token_targets, self.linear_targets, self.targets_lengths, self.split_infos, self.uttnames = queue.dequeue()
 
 			self.inputs.set_shape(self._placeholders[0].shape)
 			self.input_lengths.set_shape(self._placeholders[1].shape)
@@ -93,12 +96,14 @@ class Feeder:
 			self.linear_targets.set_shape(self._placeholders[4].shape)
 			self.targets_lengths.set_shape(self._placeholders[5].shape)
 			self.split_infos.set_shape(self._placeholders[6].shape)
+			self.uttnames.set_shape(self._placeholders[7].shape)
 
 			# Create eval queue for buffering eval data
-			eval_queue = tf.FIFOQueue(1, [tf.int32, tf.int32, tf.float32, tf.float32, tf.float32, tf.int32, tf.int32], name='eval_queue')
+			eval_queue = tf.FIFOQueue(1, [tf.int32, tf.int32, tf.float32, tf.float32, tf.float32, tf.int32, tf.int32, tf.string], name='eval_queue')
 			self._eval_enqueue_op = eval_queue.enqueue(self._placeholders)
 			self.eval_inputs, self.eval_input_lengths, self.eval_mel_targets, self.eval_token_targets, \
-				self.eval_linear_targets, self.eval_targets_lengths, self.eval_split_infos = eval_queue.dequeue()
+				self.eval_linear_targets, self.eval_targets_lengths, self.eval_split_infos, \
+				self.eval_uttnames = eval_queue.dequeue()
 
 			self.eval_inputs.set_shape(self._placeholders[0].shape)
 			self.eval_input_lengths.set_shape(self._placeholders[1].shape)
@@ -107,12 +112,14 @@ class Feeder:
 			self.eval_linear_targets.set_shape(self._placeholders[4].shape)
 			self.eval_targets_lengths.set_shape(self._placeholders[5].shape)
 			self.eval_split_infos.set_shape(self._placeholders[6].shape)
+			self.eval_uttnames.set_shape(self._placeholders[7].shape)
 
 	def start_threads(self, session):
 		self._session = session
-		thread = threading.Thread(name='background', target=self._enqueue_next_train_group)
-		thread.daemon = True #Thread will close when parent quits
-		thread.start()
+		if not self._test_only:
+		    thread = threading.Thread(name='background', target=self._enqueue_next_train_group)
+		    thread.daemon = True #Thread will close when parent quits
+		    thread.start()
 
 		thread = threading.Thread(name='background', target=self._enqueue_next_test_group)
 		thread.daemon = True #Thread will close when parent quits
@@ -122,6 +129,7 @@ class Feeder:
 		meta = self._test_meta[self._test_offset]
 		self._test_offset += 1
 
+		uttname = meta[1][len('mel-'):-len('.npy')]
 		text = meta[5]
 
 		input_data = np.asarray(text_to_sequence(text, self._cleaner_names), dtype=np.int32)
@@ -129,7 +137,7 @@ class Feeder:
 		#Create parallel sequences containing zeros to represent a non finished sequence
 		token_target = np.asarray([0.] * (len(mel_target) - 1))
 		linear_target = np.load(os.path.join(self._linear_dir, meta[2]))
-		return (input_data, mel_target, token_target, linear_target, len(mel_target))
+		return (input_data, mel_target, token_target, linear_target, len(mel_target), uttname)
 
 	def make_test_batches(self):
 		start = time.time()
@@ -141,10 +149,14 @@ class Feeder:
 		#Test on entire test set
 		examples = [self._get_test_groups() for i in range(len(self._test_meta))]
 
-		# Bucket examples based on similar output sequence length for efficiency
-		examples.sort(key=lambda x: x[-1])
+		if self._shuffle_testset:
+			# Bucket examples based on similar output sequence length for efficiency
+			examples.sort(key=lambda x: x[-2])
+		else:
+			examples.sort(key=lambda x: x[-1])
 		batches = [examples[i: i+n] for i in range(0, len(examples), n)]
-		np.random.shuffle(batches)
+		if self._shuffle_testset:
+			np.random.shuffle(batches)
 
 		log('\nGenerated {} test batches of size {} in {:.3f} sec'.format(len(batches), n, time.time() - start))
 		return batches, r
@@ -159,7 +171,7 @@ class Feeder:
 			examples = [self._get_next_example() for i in range(n * _batches_per_group)]
 
 			# Bucket examples based on similar output sequence length for efficiency
-			examples.sort(key=lambda x: x[-1])
+			examples.sort(key=lambda x: x[-2])
 			batches = [examples[i: i+n] for i in range(0, len(examples), n)]
 			np.random.shuffle(batches)
 
@@ -173,7 +185,7 @@ class Feeder:
 		test_batches, r = self.make_test_batches()
 		while not self._coord.should_stop():
 			for batch in test_batches:
-				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, r)))
+				feed_dict = dict(zip(self._placeholders, self._prepare_batch(batch, r, shuffle=self._shuffle_testset)))
 				self._session.run(self._eval_enqueue_op, feed_dict=feed_dict)
 
 	def _get_next_example(self):
@@ -187,18 +199,20 @@ class Feeder:
 		self._train_offset += 1
 
 		text = meta[5]
+		uttname = meta[1][len('mel-'):-len('.npy')]
 
 		input_data = np.asarray(text_to_sequence(text, self._cleaner_names), dtype=np.int32)
 		mel_target = np.load(os.path.join(self._mel_dir, meta[1]))
 		#Create parallel sequences containing zeros to represent a non finished sequence
 		token_target = np.asarray([0.] * (len(mel_target) - 1))
 		linear_target = np.load(os.path.join(self._linear_dir, meta[2]))
-		return (input_data, mel_target, token_target, linear_target, len(mel_target))
+		return (input_data, mel_target, token_target, linear_target, len(mel_target), uttname)
 
-	def _prepare_batch(self, batches, outputs_per_step):
+	def _prepare_batch(self, batches, outputs_per_step, shuffle=True):
 		assert 0 == len(batches) % self._hparams.tacotron_num_gpus
 		size_per_device = int(len(batches) / self._hparams.tacotron_num_gpus)
-		np.random.shuffle(batches)
+		if shuffle:
+			np.random.shuffle(batches)
 
 		inputs = None
 		mel_targets = None
@@ -207,8 +221,9 @@ class Feeder:
 		targets_lengths = None
 		split_infos = []
 
-		targets_lengths = np.asarray([x[-1] for x in batches], dtype=np.int32) #Used to mask loss
+		targets_lengths = np.asarray([x[-2] for x in batches], dtype=np.int32) #Used to mask loss
 		input_lengths = np.asarray([len(x[0]) for x in batches], dtype=np.int32)
+		uttnames = np.asarray([x[-1] for x in batches], dtype=np.unicode_)
 
 		#Produce inputs/targets of variables lengths for different GPUs
 		for i in range(self._hparams.tacotron_num_gpus):
@@ -226,7 +241,7 @@ class Feeder:
 			split_infos.append([input_max_len, mel_target_max_len, token_target_max_len, linear_target_max_len])
 
 		split_infos = np.asarray(split_infos, dtype=np.int32)
-		return (inputs, input_lengths, mel_targets, token_targets, linear_targets, targets_lengths, split_infos)
+		return (inputs, input_lengths, mel_targets, token_targets, linear_targets, targets_lengths, split_infos, uttnames)
 
 	def _prepare_inputs(self, inputs):
 		max_len = max([len(x) for x in inputs])

@@ -82,11 +82,11 @@ def model_train_mode(args, feeder, hparams, global_step):
 			model_name = 'Tacotron'
 		model = create_model(model_name or args.model, hparams)
 		if hparams.predict_linear:
-			model.initialize(feeder.inputs, feeder.input_lengths, feeder.mel_targets, feeder.token_targets, linear_targets=feeder.linear_targets,
+			model.initialize(None, feeder.inputs, feeder.input_lengths, feeder.mel_targets, feeder.token_targets, linear_targets=feeder.linear_targets,
 				targets_lengths=feeder.targets_lengths, global_step=global_step,
 				is_training=True, split_infos=feeder.split_infos)
 		else:
-			model.initialize(feeder.inputs, feeder.input_lengths, feeder.mel_targets, feeder.token_targets,
+			model.initialize(None, feeder.inputs, feeder.input_lengths, feeder.mel_targets, feeder.token_targets,
 				targets_lengths=feeder.targets_lengths, global_step=global_step,
 				is_training=True, split_infos=feeder.split_infos)
 		model.add_loss()
@@ -101,14 +101,29 @@ def model_test_mode(args, feeder, hparams, global_step):
 			model_name = 'Tacotron'
 		model = create_model(model_name or args.model, hparams)
 		if hparams.predict_linear:
-			model.initialize(feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
+			model.initialize(None, feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
 				linear_targets=feeder.eval_linear_targets, targets_lengths=feeder.eval_targets_lengths, global_step=global_step,
 				is_training=False, is_evaluating=True, split_infos=feeder.eval_split_infos)
 		else:
-			model.initialize(feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
+			model.initialize(None, feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
 				targets_lengths=feeder.eval_targets_lengths, global_step=global_step, is_training=False, is_evaluating=True, 
 				split_infos=feeder.eval_split_infos)
 		model.add_loss()
+		return model
+
+def model_synthesize_mode(model_name, feeder, hparams, global_step):
+	with tf.variable_scope('Tacotron_model', reuse=tf.AUTO_REUSE) as scope:
+		if model_name == 'Tacotron-2':
+			model_name = 'Tacotron'
+		model = create_model(model_name, hparams)
+		if hparams.predict_linear:
+			model.initialize(feeder.eval_uttnames, feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
+				linear_targets=feeder.eval_linear_targets, targets_lengths=feeder.eval_targets_lengths, global_step=global_step,
+				is_training=False, is_evaluating=False, split_infos=feeder.eval_split_infos)
+		else:
+			model.initialize(feeder.eval_uttnames, feeder.eval_inputs, feeder.eval_input_lengths, feeder.eval_mel_targets, feeder.eval_token_targets,
+				targets_lengths=feeder.eval_targets_lengths, global_step=global_step, is_training=False, is_evaluating=False, 
+				split_infos=feeder.eval_split_infos)
 		return model
 
 def train(log_dir, args, hparams):
